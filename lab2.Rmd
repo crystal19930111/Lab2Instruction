@@ -1,0 +1,314 @@
+---
+title: "Lab2 Instruction"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+date: '`r format(Sys.Date(), "September %d, %Y")`'
+---
+In this lab, you are going to learn how to download species occurrence records from Global Biodiversity Information Facility (GBIF) and organize your data in R. This exercise also contains basics for R data processing.
+
+### Note
+
+- You need to register your own account on the GBIF website (https://www.gbif.org/) first. The username and password will be used in this exercise.
+
+- Several new packages are used in our exercise: *rgbif*, *maptools*, *stringr*, *tidyverse*, *VIM*, *magrittr*, *rgeos*, *rgdal*. You need to install them before this exercise.
+
+- For more information about GBIF data processing in R, you may refer to R help file https://cran.r-project.org/web/packages/rgbif/rgbif.pdf.
+
+## Part I Download occurrence data from GBIF
+1. Set your working directory to Lab2
+```{r,eval=FALSE}
+setwd('your/path/to/Lab2')
+```
+2. Load packages
+
+Package *rgbif* is a programmatic interface to the Web Service methods provided by the Global Biodiversity Information Facility (GBIF). Package *maptools* contains worldmap data for  visualization.
+
+```{r,eval=FALSE}
+# Install from CRAN
+install.packages("rgbif")
+
+# Or install the development version from GitHub
+devtools::install_github("ropensci/rgbif")
+```
+```{r,warning=F}
+# Load packages
+library(rgbif)
+library(maptools)
+
+```
+
+```{r,echo=FALSE}
+username <- 'your username'
+password <- 'your pass word'
+email    <- 'your email'
+```
+
+3. GBIF data overview
+```{r,warning=F}
+# Number of occurrence records in GBIF.
+occ_count()
+# Number of records in China
+occ_count(country='CN') 
+# Use supported query parameter combinations
+occ_count(country='US', georeferenced=TRUE, basisOfRecord='OBSERVATION')
+```
+There are only a certain set of supported query parameter combinations that GBIF allows, you can use *?occ_count*  to find them.
+
+4. Get GBIF data
+
+We will start with simple query first. Assume that we want to download occurrence data of species *Abies lasiocarpa*. GBIF suggests to use the taxonKey parameter, of course you can search for a name directly as well.
+
+```{r}
+# Lookup names in the GBIF backbone taxonomy
+spe.inf  <- name_backbone(name = 'Abies lasiocarpa', kingdom='plants')
+taxonkey <- spe.inf$speciesKey
+
+# Or you can use a simple and quick way
+name_suggest(q='Abies lasiocarpa',limit = 5)
+
+# Search for GBIF occurrences
+# Use occ.search() to obtain small dataset (number < 200,000)
+occ.search <- occ_search(taxonKey = taxonkey, limit = 200)
+tbl.search <- occ.search$data
+class(tbl.search); dim(tbl.search)
+```
+The parameter *limit* represents the number of records to return. Note that the maximum value is 200,000. Function *occ_download()* is more appropriate if you want to obtain big dataset.The Darwin Core Archive contains both the original data as publisher provided it and the GBIF interpretation. 
+
+```{r}
+# Use occ_download() to obtain big dataset
+# You must input your username and password of GBIF account
+down.spe <- occ_download(paste0('taxonKey = ',taxonkey), user = username, 
+                         pwd = password,email = email)
+# Download information
+print(down.spe)
+# Download zip file to work directory
+occ.dl <- occ_download_get(down.spe, overwrite = T, path = '.')
+# Import data set
+tbl.dl <- occ_download_import(occ.dl)
+```
+
+You can now map point results using output from dataset.
+
+```{r}
+# World map data in maptools package
+data(wrld_simpl)
+
+# Plot map and points
+plot(wrld_simpl,col="light grey",xlim=c(-180,180), ylim=c(-90,90), axes=TRUE)
+points(tbl.dl$decimalLongitude, tbl.dl$decimalLatitude, col='red', pch=20)
+```
+
+In addition, you can also browse some GBIF recorded media files. 
+
+```{r}
+# Try to view some photos of genus Abies
+# Note: search data using the name directly is also allowed 
+res <- occ_search(scientificName = "Abies", mediaType = 'StillImage',
+                  return = "media", limit= 3)
+gbif_photos(res)
+```
+
+**Note:** the default format of data imported to R from GBIF is “tbl_df”, which is different from traditional data frame, provides opinionated data frames that make working a little easier.  If you’re already familiar with data.frame format, you can use function *as.data.frame()* to transfer it. 
+
+5. Download data within certain study area
+
+Sometimes we may need to get data within a specific study area. Take the United States as an example:
+
+```{r}
+# load packages
+library(rgeos) # read shapefile data
+library(rgdal) # wkt use
+# Read USA boundary polygons
+usa.shp <- readOGR('usaBoundary.shp')
+class(usa.shp)
+# Transfer the shapefile to wkt format 
+usa.wkt <- writeWKT(usa.shp)
+# Get data
+occ.usa <- occ_search(taxonKey = taxonkey,geometry = usa.wkt, geom_big = "bbox",limit=1000)
+
+# Plot distribution map
+plot(wrld_simpl,col="light grey",xlim=c(-180,180), ylim=c(-90,90), axes=TRUE)
+plot(usa.shp,col="yellow",add=T)
+points(occ.usa$data$decimalLongitude,occ.usa$data$decimalLatitude, col='red', pch=20)
+```
+
+
+6. Complex queries
+
+*occ_download* support multiple queries. After submitting the download task, you can open the GBIF webpage and log in to your account to view the situation.
+
+```{r}
+# complex example with many predicates
+occ.ex <- occ_download("taxonKey = 2685313",
+                       "basisOfRecord = HUMAN_OBSERVATION,OBSERVATION,MACHINE_OBSERVATION",
+                       "country = US","hasCoordinate = true",
+                       "year >= 1970","year <= 2015",
+                       "month >= 3","month <= 8",
+                       user = username,pwd = password,
+                       email = email)
+```
+![](C:/Users/Jinjing/Desktop/DAE/NewLab2/dluse.jpg)
+
+
+## Part II Tidy data and data processing
+
+After obtaining the data, we need to clean our data. Tidy data sets are easy to manipulate, model and visualize. Tidy data has three principles:
+
+-	Each variable forms a column.
+
+-	Each observation forms a row.
+
+-	Each type of observational unit forms a table.
+
+![](./rules.jpg)
+
+In this part, you are going to learn how to reshape your data and handle strings variable. Since the *data.frame* is the most common data format in R, we convert *tbl_df* data to *data.frame* for further analysis. You are suggested to consult the references and use the *tbl_df* format to conduct data processing if you have extra time.
+
+```{r}
+# Format conversion
+df.occ <- as.data.frame(tbl.dl)
+class(df.occ)
+```
+
+There are 235 variables in this data.frame.  We will select several important variables for analysis, including the coordinate, year, scientific name, country and ID of occurrence records.
+
+```{r}
+# Extract useful variables
+df.use <- subset(df.occ,hasCoordinate == T, 
+                 select = c('gbifID','decimalLatitude','decimalLongitude',
+                            'countryCode','year','scientificName'))
+names(df.use) <- gsub(names(df.use),pattern = 'decimalLatitude',replacement = 'Lat')
+names(df.use) <- gsub(names(df.use),pattern = 'decimalLongitude',replacement = 'Lon')
+head(df.use)
+```
+
+1. Gathering and Spreading
+
+*gather()*  takes multiple columns and collapses into key-value pairs, duplicating all other columns as needed.
+
+*spread()* spread a key-value pair across multiple columns.
+
+You use *gather()* when you notice that you have columns that are not variables. Spreading is the opposite of gathering.
+
+**Note:** “%>%” is a type of pipeline operator, means the object on the left hand side is passed as the first argument to the function on the right hand side. The *magrittr* package offers a set of operators make your code more readable. 
+
+```{r,warning=F}
+# load package
+library(tidyverse) # a package including several packages related to data cleaning
+library(magrittr) # for pipeline operators
+
+# Gathering and Spreading
+# Gathering: reshape data.frame from wide to long format
+# Convert all variables excepet gbifID
+df.gather1 <- df.use %>% gather(attributes,value,-gbifID)
+head(df.gather1)
+dim(df.gather1)
+# Select two variables to convert
+df.gather2 <- df.use %>% gather('countryCode','year',key = 'attributes',value = 'value',-gbifID)
+head(df.gather2)
+dim(df.gather2)
+
+# Spreading: reshape data.frame from long to wide format
+# Convert the data back to original state
+df.spread <- df.gather1 %>% spread(attributes,value)
+head(df.spread)
+dim(df.spread)
+```
+
+2. Separating and uniting
+
+*separate()* pulls apart one column into multiple columns, by splitting wherever a separator character appears. 
+
+*unite()* is the inverse of *separate()*: it combines multiple columns into a single column.
+
+```{r}
+# Unite: Unite multiple columns into one
+# Separator characrer: “,”
+df.unite <- df.use %>% unite(Coordinate,Lat,Lon,sep = ",")
+head(df.unite)
+
+# Separate: Separate one column into multiple columns
+df.seprate <- df.unite %>% separate(Coordinate,c('Lat','Lon'),sep = ",")
+head(df.seprate)
+```
+
+3. Missing values
+
+**Note:** In this part, we use mode and mean of a variable to replace NA values. Pay attention to it is not a reasonable way to handle missing values in GBIF datasets!  We only use it to show how to use *tidyverse* package to conduct missing value analysis. Please select a reasonable way in the actual data analysis.
+
+```{r,warning=F,message=F}
+library(VIM)
+# Transfer empty string "" to missing value NA
+df.use$countryCode[which(df.use$countryCode == "")] <- NA
+
+# Missing value patterns
+aggr(df.use,prop = F,numbers=T)
+```
+
+```{r}
+# Missing value processing
+# Replace NA of year with the average year
+year_mean <- ceiling(mean(df.use$year, na.rm = T))
+# Replace NA of country Code with the mode of countryCode
+country_mode <- df.use$countryCode[which.max(table(df.use$countryCode))]
+# New data.frame pattern
+df.pro <- replace_na(df.use, replace = list(year = year_mean, countryCode = country_mode))
+aggr(df.pro,prop = F,numbers=T)
+```
+
+4. Other useful functions
+
+*count()* in package *plyr* count combinations in data.frame and summarize multiple dimensions.
+
+```{r,results='hide',warning=F,message=F}
+library(plyr)
+```
+```{r}
+# count combinations in df.use, select year and countryCode as grouping variables
+df.count <- count(df.use,c('year','countryCode'))
+# Sort by frequency
+df.order <- df.count[order(df.count$freq,decreasing = T),]
+head(df.order)
+```
+Package *stringr* provides several useful string processing function. *stringr* is not part of the core *tidyverse* package, we need to load it before analysis.
+
+```{r}
+# load package
+library(stringr)
+# select a string
+spe.name <- df.use$scientificName[1]
+print(spe.name)
+
+# String length
+str_length(spe.name)
+# Detect pattern
+str_detect(spe.name, "Abies")
+# Combine strings
+str_c(spe.name,spe.name,sep = ";")
+# Split string
+str_split(spe.name," ")
+# Count number of "a" in the string
+str_count(spe.name,"a")
+# Replace special character with empty character ""
+spe.name %>% str_replace_all("\\)","") %>% str_replace_all("\\(","")
+```
+
+## Exercise (Optional)
+
+1. Try to use complex queries to download GBIF data. Use ?occ_download to find acceptable arguments and select 5 of them to write a download command. You can also try to use body parameter to pass in your own complete query.
+
+2. R package *dismo* is also common use in GBIF data downloading. Try to use function *gbif()* in *dismo* package to download GBIF data.
+
+3. Use *separate()* function in *tidyr* package to split variable "eventTime" in GBIF dataset into hour, minute and second. Then restore the original dataset using function *unite()*.
+
+**Hint:** you need to process special characters first.
+
+## References
+
+1. Wickham, H. (2014). Tidy Data. Journal of Statistical Software, 59(10). https://doi.org/10.18637/jss.v059.i10 
+ 
+2. R for Data Science, http://r4ds.had.co.nz/
+
+3. R help files of packages
